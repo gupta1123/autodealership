@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Card,
   CardContent,
@@ -10,7 +10,6 @@ import {
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
   Tabs,
   TabsContent,
@@ -34,6 +33,11 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import {
   Drawer,
   DrawerClose,
   DrawerContent,
@@ -50,14 +54,13 @@ import {
   ExternalLink,
   FileText,
   GitCompare,
-  ListChecks,
   Loader2,
   Play,
-  Search,
   ShieldCheck,
   Sparkles,
   TriangleAlert,
   Upload,
+  Trash2,
 } from "lucide-react";
 
 // ------------------------------------------------------------
@@ -114,6 +117,12 @@ type FieldMismatch = {
   label: string;
   canonical: string;
   mismatchingDocs: DocType[];
+};
+
+type QueuedUpload = {
+  id: string;
+  name: string;
+  file?: File;
 };
 
 const DUMMY_DOCS: CaseDoc[] = [
@@ -245,8 +254,6 @@ const DUMMY_DOCS: CaseDoc[] = [
 ];
 
 const TOTAL_DOCS = DUMMY_DOCS.length;
-const TOTAL_PAGES = DUMMY_DOCS.reduce((acc, doc) => acc + doc.pages, 0);
-const TOTAL_DOC_TYPES = new Set(DUMMY_DOCS.map((doc) => doc.type)).size;
 
 const ALL_FIELDS: { key: FieldKey; label: string; important?: boolean }[] = [
   { key: "vin", label: "Chassis / VIN", important: true },
@@ -270,6 +277,43 @@ const ALL_FIELDS: { key: FieldKey; label: string; important?: boolean }[] = [
 // ------------------------------------------------------------
 // Utility helpers
 // ------------------------------------------------------------
+
+const PIPELINE_STAGES: Array<{
+  id: string;
+  label: string;
+  description: string;
+  start: number;
+  end: number;
+}> = [
+  {
+    id: "classify",
+    label: "Classifying document type",
+    description: "Matching against RTO, invoice, insurance, and accessory templates.",
+    start: 0,
+    end: 0.25,
+  },
+  {
+    id: "ocr",
+    label: "Digitizing page images",
+    description: "Running OCR + layout detection to capture structured content.",
+    start: 0.25,
+    end: 0.55,
+  },
+  {
+    id: "extract",
+    label: "Extracting key fields",
+    description: "Calling entity models to populate VIN, policy numbers, taxes, and more.",
+    start: 0.55,
+    end: 0.85,
+  },
+  {
+    id: "validate",
+    label: "Reconciling & validating",
+    description: "Cross-checking canonical values and flagging mismatches.",
+    start: 0.85,
+    end: 1,
+  },
+];
 
 function normalize(v?: string) {
   return (v || "").replace(/\s+/g, " ").trim().toLowerCase();
@@ -396,10 +440,14 @@ function QueueTimeline({
   docs,
   processedCount,
   currentIndex,
+  currentStageLabel,
+  classificationComplete,
 }: {
   docs: CaseDoc[];
   processedCount: number;
   currentIndex: number;
+  currentStageLabel: string;
+  classificationComplete: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -414,7 +462,7 @@ function QueueTimeline({
   }, [docs.length, currentIndex]);
 
   return (
-    <div className="flex h-full flex-col rounded-3xl border border-zinc-200 bg-white/85 p-6 shadow-xl backdrop-blur lg:max-h-[320px]">
+    <div className="flex h-full flex-col rounded-3xl border border-zinc-200 bg-white/85 p-6 shadow-xl backdrop-blur max-h-[320px]">
       <div className="mb-4 text-xs uppercase tracking-[0.3em] text-slate-500">
         Queue timeline
       </div>
@@ -435,10 +483,23 @@ function QueueTimeline({
                 : isDone
                   ? "text-slate-600"
                   : "text-slate-400";
-              const statusLabel = isDone
-                ? "Completed"
+              const displayName =
+                isDone || (isCurrent && classificationComplete)
+                  ? doc.title
+                  : doc.sourceHint || `${doc.id}.pdf`;
+              const displayMeta = isDone
+                ? doc.type
                 : isCurrent
-                  ? "Processing"
+                  ? classificationComplete
+                    ? doc.type
+                    : "Classifying upload"
+                  : "Awaiting classification";
+              const statusLabel = isDone
+                ? "Ready for dashboard"
+                : isCurrent
+                  ? classificationComplete
+                    ? currentStageLabel
+                    : "Classifying document type"
                   : "In queue";
               const statusIcon = isDone ? (
                 <CheckCircle2 className="h-3.5 w-3.5 text-slate-700" />
@@ -461,9 +522,9 @@ function QueueTimeline({
                   />
                   <div className="pl-6">
                     <div className="text-sm font-medium leading-tight text-slate-900">
-                      {doc.title}
+                      {displayName}
                     </div>
-                    <div className="text-xs text-slate-500">{doc.type}</div>
+                    <div className="text-xs text-slate-500">{displayMeta}</div>
                     <div className={`mt-2 flex items-center gap-2 text-xs font-medium ${statusColor}`}>
                       {statusIcon}
                       {statusLabel}
@@ -485,6 +546,7 @@ export default function CaseVerifierUI() {
   const [progress, setProgress] = useState(0);
   const [processingIndex, setProcessingIndex] = useState(0);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  const [queuedUploads, setQueuedUploads] = useState<QueuedUpload[]>([]);
 
   useEffect(() => {
     if (stage !== "processing") return;
@@ -539,12 +601,45 @@ export default function CaseVerifierUI() {
 
   const activeDoc = activeDocId ? docs.find((d) => d.id === activeDocId) : undefined;
 
+  const uploadTemplates = useMemo(
+    () => queuedUploads.map((_, index) => DUMMY_DOCS[index % DUMMY_DOCS.length]),
+    [queuedUploads]
+  );
+
+  const caseName = useMemo(() => {
+    const buyer = byField.buyerName?.canonical?.trim() || "";
+    const vin = (byField.vin?.canonical || "").replace(/\s+/g, "");
+    const tokens = buyer.split(/\s+/).filter(Boolean);
+    const first = tokens[0] || "pending";
+    const last = tokens.length > 1 ? tokens[tokens.length - 1] : tokens[0] || "buyer";
+    const normalizedFirst = first.toLowerCase();
+    const normalizedLast = last.toLowerCase();
+    const normalizedVin = vin ? vin.toUpperCase() : "PENDINGVIN";
+    return `${normalizedFirst}-${normalizedLast}-${normalizedVin}`;
+  }, [byField.buyerName?.canonical, byField.vin?.canonical]);
+
   function handleStart() {
+    if (queuedUploads.length === 0) return;
     setDocs([]);
     setActiveDocId(null);
     setProgress(0);
     setProcessingIndex(0);
+    setQueuedUploads([]);
     setStage("processing");
+  }
+
+  function handleQueueUpload(files?: FileList | null) {
+    if (!files || files.length === 0) return;
+    const incoming: QueuedUpload[] = Array.from(files).map((file) => ({
+      id: `${file.name}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name: file.name,
+      file,
+    }));
+    setQueuedUploads((prev) => [...prev, ...incoming]);
+  }
+
+  function handleRemoveUpload(id: string) {
+    setQueuedUploads((prev) => prev.filter((item) => item.id !== id));
   }
 
   // simple upload stub (does not parse; just appends a placeholder doc)
@@ -564,6 +659,7 @@ export default function CaseVerifierUI() {
   }
 
   if (stage === "idle") {
+    const hasUploads = queuedUploads.length > 0;
     return (
       <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-white via-zinc-100 to-white">
         <div className="absolute inset-0 -z-10">
@@ -589,56 +685,128 @@ export default function CaseVerifierUI() {
               reconcile mismatches, and stage your dealer audit dashboard automatically.
             </p>
           </div>
-          <div className="grid w-full max-w-3xl gap-4 sm:grid-cols-3">
-            <div className="rounded-2xl border border-white/60 bg-white/90 px-4 py-5 shadow-sm backdrop-blur">
-              <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Documents
+          <div className="w-full max-w-3xl space-y-6">
+            <label className="relative flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-slate-300 bg-white/90 px-8 py-10 text-slate-600 shadow-sm transition hover:border-slate-500 hover:bg-white">
+              <Upload className="h-6 w-6" />
+              <div className="text-base font-medium">Drop your PDFs here</div>
+              <p className="text-sm text-slate-500">
+                Accepts multiple uploads · we&apos;ll classify each file automatically
+              </p>
+              <input
+                type="file"
+                multiple
+                accept="application/pdf"
+                className="absolute inset-0 cursor-pointer opacity-0"
+                onChange={(e) => {
+                  handleQueueUpload(e.target.files);
+                  if (e.target.value) e.target.value = "";
+                }}
+              />
+            </label>
+
+            {hasUploads && (
+              <div className="w-full max-w-3xl space-y-3 text-left">
+                <div className="flex items-center justify-between">
+                  <div className="text-sm font-medium text-slate-700">Uploaded documents</div>
+                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                    {queuedUploads.length} file{queuedUploads.length > 1 ? "s" : ""}
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <div className="flex items-center gap-3 pb-1">
+                    {queuedUploads.map((upload, index) => {
+                      const template = uploadTemplates[index % uploadTemplates.length];
+                      return (
+                        <Popover key={upload.id}>
+                          <PopoverTrigger asChild>
+                            <button
+                              type="button"
+                              className="group relative flex h-12 w-12 items-center justify-center rounded-2xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-slate-400 hover:text-slate-900"
+                            >
+                              <FileText className="h-5 w-5" />
+                              <span className="absolute -top-1 -right-1 grid h-5 w-5 place-items-center rounded-full bg-black text-[11px] font-semibold text-white">
+                                {index + 1}
+                              </span>
+                            </button>
+                          </PopoverTrigger>
+                          <PopoverContent align="center" side="top" className="w-64 text-left">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium text-slate-900">
+                                  {upload.name}
+                                </div>
+                                <div className="text-xs text-slate-500">
+                                  Slot {index + 1} · {template?.type ?? "Unknown type"}
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className="rounded-full border border-slate-200 p-1 text-slate-500 transition hover:border-slate-400 hover:text-slate-700"
+                                onClick={() => handleRemoveUpload(upload.id)}
+                                aria-label="Remove file"
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </button>
+                            </div>
+                            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                              Ready for AI classification. We&apos;ll identify document type before extraction.
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">{TOTAL_DOCS}</div>
-            </div>
-            <div className="rounded-2xl border border-white/60 bg-white/90 px-4 py-5 shadow-sm backdrop-blur">
-              <div className="text-xs uppercase tracking-[0.2em] text-slate-500">Pages</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">{TOTAL_PAGES}</div>
-            </div>
-            <div className="rounded-2xl border border-white/60 bg-white/90 px-4 py-5 shadow-sm backdrop-blur">
-              <div className="text-xs uppercase tracking-[0.2em] text-slate-500">
-                Doc families
-              </div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">
-                {TOTAL_DOC_TYPES}
-              </div>
-            </div>
+            )}
           </div>
-          <motion.div
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.97 }}
-            transition={{ type: "spring", stiffness: 200, damping: 15 }}
-          >
-            <Button
-              size="lg"
-              className="group relative overflow-hidden rounded-2xl px-8 py-6 text-base font-semibold shadow-lg"
-              onClick={handleStart}
+
+          {hasUploads && (
+            <motion.div
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
+              transition={{ type: "spring", stiffness: 200, damping: 15 }}
             >
-              <span className="absolute inset-0 bg-gradient-to-r from-black via-zinc-900 to-black opacity-90 transition-opacity group-hover:opacity-100" />
-              <span className="relative z-10 flex items-center gap-2 tracking-tight text-white">
-                <Play className="h-5 w-5 fill-white" />
-                Start verification
-              </span>
-            </Button>
-          </motion.div>
+              <Button
+                size="lg"
+                disabled={!hasUploads}
+                className="group relative overflow-hidden rounded-2xl px-8 py-6 text-base font-semibold shadow-lg disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={handleStart}
+              >
+                <span className="absolute inset-0 bg-gradient-to-r from-black via-zinc-900 to-black opacity-90 transition-opacity group-hover:opacity-100" />
+                <span className="relative z-10 flex items-center gap-2 tracking-tight text-white">
+                  <Play className="h-5 w-5 fill-white" />
+                  Start verification
+                </span>
+              </Button>
+            </motion.div>
+          )}
         </motion.div>
       </main>
     );
   }
 
   if (stage === "processing") {
-    const processedCount = Math.min(TOTAL_DOCS, Math.floor(progress * TOTAL_DOCS));
-    const currentIndex = Math.min(TOTAL_DOCS - 1, processingIndex);
+    const totalDocs = TOTAL_DOCS;
+    const processedCount = Math.min(totalDocs, Math.floor(progress * totalDocs));
+    const currentIndex = Math.min(totalDocs - 1, processingIndex);
     const currentDoc = DUMMY_DOCS[currentIndex];
-    const fractional = progress * TOTAL_DOCS - processedCount;
+    const fractional = progress * totalDocs - processedCount;
     const docProgress = Math.min(1, Math.max(0, fractional));
     const secondsElapsed = Math.min(15, Math.round(progress * 15));
     const secondsRemaining = Math.max(0, 15 - secondsElapsed);
+    const stageIndex = PIPELINE_STAGES.findIndex((stage) => docProgress < stage.end);
+    const currentStageIndex = stageIndex === -1 ? PIPELINE_STAGES.length - 1 : stageIndex;
+    const currentStage = PIPELINE_STAGES[currentStageIndex] ?? PIPELINE_STAGES[PIPELINE_STAGES.length - 1];
+    const classificationStage = PIPELINE_STAGES[0];
+    const classificationComplete = docProgress >= classificationStage.end;
+    const sourceName = currentDoc.sourceHint || `${currentDoc.id}.pdf`;
+
+    function stageStatus(stage: (typeof PIPELINE_STAGES)[number]) {
+      if (docProgress >= stage.end) return "done";
+      if (docProgress >= stage.start && docProgress < stage.end) return "active";
+      return "pending";
+    }
 
     return (
       <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-white via-zinc-100 to-white text-slate-900">
@@ -655,10 +823,10 @@ export default function CaseVerifierUI() {
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <span className="text-xs uppercase tracking-[0.3em] text-slate-500">
-                Preparing workspace
+                Document intake pipeline
               </span>
               <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900 sm:text-4xl">
-                Running document intelligence pipeline…
+                Classifying, digitizing, and validating uploads…
               </h1>
             </div>
             <div className="rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-right shadow-lg">
@@ -688,9 +856,9 @@ export default function CaseVerifierUI() {
               <div className="text-sm text-slate-600">
                 Analyzing{" "}
                 <span className="font-semibold text-slate-900">
-                  {Math.min(TOTAL_DOCS, processedCount + 1)}
+                  {Math.min(totalDocs, processedCount + 1)}
                 </span>{" "}
-                of {TOTAL_DOCS} documents
+                of {totalDocs} documents
               </div>
             </div>
             <div className="relative h-3 w-full overflow-hidden rounded-full bg-zinc-100">
@@ -715,20 +883,73 @@ export default function CaseVerifierUI() {
                   <div className="text-xs uppercase tracking-[0.3em] text-slate-500">
                     Current document
                   </div>
-                  <h2 className="mt-2 text-lg font-semibold leading-tight text-slate-900">
-                    {currentDoc.title}
-                  </h2>
-                  <div className="mt-1 text-sm text-slate-500">{currentDoc.type}</div>
+                  <div className="mt-2 min-h-[56px]">
+                    <AnimatePresence mode="wait">
+                      {classificationComplete ? (
+                        <motion.div
+                          key="identified"
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          transition={{ duration: 0.25 }}
+                        >
+                          <h2 className="text-lg font-semibold leading-tight text-slate-900">
+                            {currentDoc.title}
+                          </h2>
+                          <div className="mt-1 text-sm text-slate-500">{currentDoc.type}</div>
+                        </motion.div>
+                      ) : (
+                        <motion.div
+                          key="upload"
+                          initial={{ opacity: 0, y: 10 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          transition={{ duration: 0.25 }}
+                        >
+                          <h2 className="text-lg font-semibold leading-tight text-slate-900">
+                            {sourceName}
+                          </h2>
+                          <div className="mt-1 text-sm text-slate-500">
+                            Identifying document type
+                          </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                  <div className="text-xs text-slate-400">Source file · {sourceName}</div>
                 </div>
                 <div className="flex items-center gap-1 rounded-full border border-zinc-200 bg-zinc-100 px-3 py-1 text-xs text-slate-600">
                   <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-900" />
-                  Extracting fields
+                  {currentStage.label}
                 </div>
               </div>
-              <div className="mt-6 space-y-2 text-sm text-slate-600">
-                <p>• OCR & layout detection</p>
-                <p>• Entity linking to canonical registry</p>
-                <p>• Policy conformance checks</p>
+              <div className="mt-6 space-y-3">
+                {PIPELINE_STAGES.map((stage) => {
+                  const status = stageStatus(stage);
+                  const dotClass =
+                    status === "done"
+                      ? "bg-slate-900"
+                      : status === "active"
+                        ? "bg-slate-900 animate-pulse"
+                        : "bg-zinc-300";
+                  const textClass =
+                    status === "pending" ? "text-slate-400" : "text-slate-900";
+                  const descriptionClass =
+                    status === "pending" ? "text-slate-400" : "text-slate-500";
+                  return (
+                    <div key={stage.id} className="flex gap-3">
+                      <span className={`mt-2 h-2 w-2 rounded-full ${dotClass}`} />
+                      <div>
+                        <div className={`text-sm font-medium ${textClass}`}>
+                          {stage.label}
+                        </div>
+                        <div className={`text-xs ${descriptionClass}`}>
+                          {stage.description}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               <div className="mt-6">
                 <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-[0.2em] text-slate-500">
@@ -749,6 +970,8 @@ export default function CaseVerifierUI() {
               docs={DUMMY_DOCS}
               processedCount={processedCount}
               currentIndex={currentIndex}
+              currentStageLabel={currentStage.label}
+              classificationComplete={classificationComplete}
             />
           </div>
         </motion.div>
@@ -761,7 +984,7 @@ export default function CaseVerifierUI() {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <p className="text-zinc-600">No document selected</p>
-      </div>
+    </div>
     );
   }
 
@@ -785,17 +1008,10 @@ export default function CaseVerifierUI() {
               <Pill>
                 <GitCompare className="h-3.5 w-3.5" /> {allMismatches.length} mismatches
               </Pill>
-              <Pill>
-                <ListChecks className="h-3.5 w-3.5" /> Tax sanity: {taxOk ? "OK" : "Check"}
-              </Pill>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
-              <Input placeholder="Search field or value" className="pl-8 w-56" />
-            </div>
             <label className="relative inline-flex items-center">
               <input
                 type="file"
@@ -818,21 +1034,18 @@ export default function CaseVerifierUI() {
               </div>
               <div>
                 <div className="text-sm text-zinc-500">Current Case</div>
-                <div className="font-medium">New Honda UNICORN · Buyer: Aasim Abbas Khan Durrani</div>
+                <div className="font-medium">{caseName}</div>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="rounded-xl border bg-white px-3 py-2 text-right shadow-sm">
-                    <div className="text-xs text-zinc-500">Risk Score</div>
-                    <div className="text-lg font-semibold tracking-tight">{risk}</div>
-                  </div>
-                </TooltipTrigger>
-                <TooltipContent>Derived from mismatch count & sanity checks</TooltipContent>
-              </Tooltip>
-              <Button className="rounded-xl">Export Report</Button>
-            </div>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div className="rounded-xl border bg-white px-3 py-2 text-right shadow-sm">
+                  <div className="text-xs text-zinc-500">Risk Score</div>
+                  <div className="text-lg font-semibold tracking-tight">{risk}</div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent>Derived from mismatch count & reconciliation checks</TooltipContent>
+            </Tooltip>
           </CardContent>
         </Card>
 
@@ -852,9 +1065,9 @@ export default function CaseVerifierUI() {
 
           {/* REVIEW TAB: Side-by-side document + extracted + Markdown OCR */}
           <TabsContent value="review">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)_minmax(0,1fr)]">
               {/* Left: Document browser */}
-              <Card className="lg:col-span-7 border-zinc-200">
+              <Card className="border-zinc-200">
                 <CardHeader className="pb-2">
                   <CardTitle className="flex items-center justify-between text-base">
                     <span className="flex items-center gap-2"><FileText className="h-4 w-4" /> Documents</span>
@@ -862,114 +1075,123 @@ export default function CaseVerifierUI() {
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-0">
-                  <div className="grid grid-cols-1 sm:grid-cols-2">
-                    <ScrollArea className="h-[520px] border-r p-3">
-                      <div className="space-y-2">
-                        {docs.map((d) => (
-                          <button
-                            key={d.id}
-                            onClick={() => setActiveDocId(d.id)}
-                            className={`w-full rounded-xl border px-3 py-2 text-left transition hover:bg-zinc-50 ${
-                              activeDocId === d.id ? "border-zinc-900" : "border-zinc-200"
-                            }`}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <div className="truncate text-sm font-medium">{d.title}</div>
-                              <Badge variant="outline" className="rounded-full text-[10px]">
-                                {d.type}
-                              </Badge>
-                            </div>
-                            <div className="mt-1 flex items-center justify-between text-xs text-zinc-500">
-                              <span>{d.pages} page{d.pages > 1 ? "s" : ""}</span>
+                  <ScrollArea className="h-[520px] p-3">
+                    <div className="space-y-2">
+                      {docs.map((d) => (
+                        <button
+                          key={d.id}
+                          onClick={() => setActiveDocId(d.id)}
+                          className={`flex w-full flex-col rounded-xl border px-3 py-2 text-left transition hover:bg-zinc-50 ${
+                            activeDocId === d.id ? "border-zinc-900" : "border-zinc-200"
+                          }`}
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div className="line-clamp-2 text-sm font-medium leading-tight">{d.title}</div>
+                            <div className="flex items-center gap-2 text-xs text-zinc-500">
+                              <Badge variant="outline" className="rounded-full text-[9px]">{d.type}</Badge>
                               <span className="truncate">{d.sourceHint}</span>
                             </div>
-                          </button>
-                        ))}
-                      </div>
-                    </ScrollArea>
-
-                    <div className="flex h-[520px] flex-col">
-                      <div className="flex items-center justify-between border-b px-3 py-2">
-                        <div className="truncate text-sm font-medium">{activeDoc.title}</div>
-                        <Badge variant="secondary" className="rounded-full text-[10px]">{activeDoc.type}</Badge>
-                      </div>
-                      <ScrollArea className="flex-1">
-                        {/* Placeholder page preview */}
-                        <div className="grid place-items-center p-6">
-                          <div className="aspect-[3/4] w-full max-w-md rounded-xl border bg-white p-4 shadow-sm">
-                            <div className="mb-2 text-xs text-zinc-500">Source preview (placeholder)</div>
-                            <div className="h-full rounded-md border bg-zinc-50" />
+                            <div className="text-[11px] uppercase tracking-wide text-zinc-400">
+                              {d.pages} page{d.pages > 1 ? "s" : ""}
+                            </div>
                           </div>
-                        </div>
-                      </ScrollArea>
+                        </button>
+                      ))}
                     </div>
-                  </div>
+                  </ScrollArea>
                 </CardContent>
               </Card>
 
-              {/* Right: Extracted fields + Markdown OCR */}
-              <div className="lg:col-span-5 space-y-4">
-                <Card className="border-zinc-200">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Extracted Fields</CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <ScrollArea className="h-[260px]">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead>Field</TableHead>
-                            <TableHead>Value</TableHead>
-                            <TableHead className="w-24">Status</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {ALL_FIELDS.map(({ key, label }) => {
-                            const v = activeDoc.fields[key];
-                            const canonical = byField[key]?.canonical;
-                            const ok = !v || !canonical || normalize(v) === normalize(canonical);
-                            return (
-                              <TableRow key={key}>
-                                <TableCell className="whitespace-nowrap text-sm">{label}</TableCell>
-                                <TableCell className="text-sm">
-                                  <FieldValue value={v} />
-                                </TableCell>
-                                <TableCell>
-                                  <ValueBadge ok={ok} />
-                                </TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </TableBody>
-                      </Table>
-                    </ScrollArea>
-                  </CardContent>
-                </Card>
+               {/* Middle: Source preview */}
+               <Card className="border-zinc-200">
+                 <div className="flex h-[520px] min-w-0 flex-col overflow-hidden">
+                   <div className="flex-shrink-0 space-y-1 border-b px-3 py-2">
+                     <div className="line-clamp-2 text-sm font-medium leading-tight">{activeDoc.title}</div>
+                     <div className="flex items-center gap-2 text-xs text-zinc-500">
+                       <Badge variant="secondary" className="rounded-full text-[10px]">{activeDoc.type}</Badge>
+                       <span className="truncate">{activeDoc.sourceHint || "source-file.pdf"}</span>
+                     </div>
+                   </div>
+                   <ScrollArea className="flex-1 min-h-0">
+                     <div className="p-6">
+                       <div className="mx-auto aspect-[3/4] w-full max-w-sm rounded-xl border bg-white p-4 shadow-sm">
+                         <div className="mb-2 text-xs text-zinc-500">Source preview (placeholder)</div>
+                         <div className="h-full rounded-md border bg-zinc-50" />
+                       </div>
+                     </div>
+                   </ScrollArea>
+                 </div>
+               </Card>
 
-                <Card className="border-zinc-200">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Markdown OCR</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="rounded-xl border bg-zinc-50 p-3">
-                      <pre className="max-h-[220px] overflow-auto whitespace-pre-wrap font-mono text-xs leading-relaxed">{activeDoc.md}</pre>
-                      <div className="mt-2 flex items-center gap-2">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          className="gap-2"
-                          onClick={() => navigator.clipboard.writeText(activeDoc.md)}
-                        >
-                          <Copy className="h-4 w-4" /> Copy MD
-                        </Button>
-                        <Button size="sm" variant="ghost" className="gap-2">
-                          <ExternalLink className="h-4 w-4" /> Open in new tab
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
+               {/* Right: Extracted fields + OCR insights */}
+               <Card className="border-zinc-200 flex flex-col overflow-hidden">
+                 <Tabs defaultValue="fields" className="flex flex-col h-full">
+                   <CardHeader className="flex-shrink-0 pb-0">
+                     <CardTitle className="text-base">Document insights</CardTitle>
+                     <TabsList className="mt-4 grid w-full grid-cols-2">
+                       <TabsTrigger value="fields">Extracted fields</TabsTrigger>
+                       <TabsTrigger value="ocr">OCR markdown</TabsTrigger>
+                     </TabsList>
+                   </CardHeader>
+                   <CardContent className="flex-1 pt-4 min-h-0">
+                     <TabsContent value="fields" className="h-full m-0">
+                       <ScrollArea className="h-[400px]">
+                         <Table>
+                           <TableHeader>
+                             <TableRow>
+                               <TableHead>Field</TableHead>
+                               <TableHead>Value</TableHead>
+                               <TableHead className="w-24">Status</TableHead>
+                             </TableRow>
+                           </TableHeader>
+                           <TableBody>
+                             {ALL_FIELDS.map(({ key, label }) => {
+                               const v = activeDoc.fields[key];
+                               const canonical = byField[key]?.canonical;
+                               const ok = !v || !canonical || normalize(v) === normalize(canonical);
+                               return (
+                                 <TableRow key={key}>
+                                   <TableCell className="whitespace-nowrap text-sm">{label}</TableCell>
+                                   <TableCell className="text-sm">
+                                     <FieldValue value={v} />
+                                   </TableCell>
+                                   <TableCell>
+                                     <ValueBadge ok={ok} />
+                                   </TableCell>
+                                 </TableRow>
+                               );
+                             })}
+                           </TableBody>
+                         </Table>
+                       </ScrollArea>
+                     </TabsContent>
+                     <TabsContent value="ocr" className="h-full m-0">
+                       <div className="h-full flex flex-col">
+                         <ScrollArea className="flex-1">
+                           <div className="rounded-xl border bg-zinc-50 p-3">
+                             <pre className="whitespace-pre-wrap font-mono text-xs leading-relaxed">
+                               {activeDoc.md}
+                             </pre>
+                           </div>
+                         </ScrollArea>
+                         <div className="flex-shrink-0 mt-2 flex items-center gap-2">
+                           <Button
+                             size="sm"
+                             variant="secondary"
+                             className="gap-2"
+                             onClick={() => navigator.clipboard.writeText(activeDoc.md)}
+                           >
+                             <Copy className="h-4 w-4" /> Copy MD
+                           </Button>
+                           <Button size="sm" variant="ghost" className="gap-2">
+                             <ExternalLink className="h-4 w-4" /> Open in new tab
+                           </Button>
+                         </div>
+                       </div>
+                     </TabsContent>
+                   </CardContent>
+                 </Tabs>
+               </Card>
             </div>
           </TabsContent>
 
@@ -1139,10 +1361,6 @@ export default function CaseVerifierUI() {
           </TabsContent>
         </Tabs>
 
-        {/* Footer */}
-        <div className="mt-6 text-center text-xs text-zinc-500">
-          UI only — Wire OCR (Docling/PaddleOCR/Tesseract) & extraction (Gemini Pro) into the upload stub.
-        </div>
       </main>
     </TooltipProvider>
   );
