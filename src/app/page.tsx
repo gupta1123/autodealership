@@ -756,6 +756,15 @@ export default function CaseVerifierUI() {
     );
   }
 
+  // Safety check for activeDoc
+  if (!activeDoc) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <p className="text-zinc-600">No document selected</p>
+      </div>
+    );
+  }
+
   return (
     <TooltipProvider>
       <main className="min-h-screen w-full bg-gradient-to-b from-white to-zinc-50 p-4 sm:p-6">
