@@ -1,36 +1,95 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# AutoDealer
 
-## Getting Started
+A modern Next.js project built with TypeScript, Tailwind CSS, and Shadcn UI components.
 
-First, run the development server:
+## 🚀 Features
+
+- **Next.js 15** - Latest version with App Router
+- **TypeScript** - Type-safe development
+- **Tailwind CSS** - Utility-first CSS framework
+- **Shadcn UI** - Beautiful, accessible component library
+- **ESLint** - Code quality and consistency
+
+## 📦 Installed Components
+
+- Button
+- Card
+- Input
+
+## 🛠️ Getting Started
+
+### Development Server
+
+Run the development server:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) in your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Building for Production
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run build
+npm start
+```
 
-## Learn More
+## 📚 Adding More Shadcn Components
 
-To learn more about Next.js, take a look at the following resources:
+To add more Shadcn UI components:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npx shadcn@latest add [component-name]
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+For example:
+```bash
+npx shadcn@latest add dialog
+npx shadcn@latest add dropdown-menu
+npx shadcn@latest add form
+```
 
-## Deploy on Vercel
+Browse all available components at [ui.shadcn.com](https://ui.shadcn.com)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## 📖 Documentation
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [Next.js Documentation](https://nextjs.org/docs)
+- [Shadcn UI Documentation](https://ui.shadcn.com)
+- [Tailwind CSS Documentation](https://tailwindcss.com/docs)
+- [TypeScript Documentation](https://www.typescriptlang.org/docs)
+
+## 📁 Project Structure
+
+```
+AutoDealer/
+├── src/
+│   ├── app/
+│   │   ├── layout.tsx      # Root layout
+│   │   ├── page.tsx        # Home page
+│   │   └── globals.css     # Global styles
+│   ├── components/
+│   │   └── ui/             # Shadcn UI components
+│   └── lib/
+│       └── utils.ts        # Utility functions
+├── public/                 # Static assets
+└── package.json           # Dependencies
+```
+
+## 🎨 Customization
+
+### Theme Colors
+
+Edit the CSS variables in `src/app/globals.css` to customize your theme colors.
+
+### Tailwind Configuration
+
+Modify `tailwind.config.ts` for custom Tailwind settings.
+
+### Component Configuration
+
+Check `components.json` for Shadcn UI configuration.
+
+## 📝 License
+
+This project is open source and available under the MIT License.
