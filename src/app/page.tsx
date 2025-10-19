@@ -674,23 +674,23 @@ export default function CaseVerifierUI() {
         >
           <div className="inline-flex items-center gap-2 rounded-full border border-white/60 bg-white/80 px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm backdrop-blur">
             <Sparkles className="h-3.5 w-3.5 text-black" />
-            Guided intake journey
+            AutoDealer Demo
           </div>
           <div className="space-y-4">
             <h1 className="text-4xl font-semibold tracking-tight text-slate-900 sm:text-5xl">
-              Start the case verification experience
+              Vehicle Registration Document Verifier
             </h1>
             <p className="mx-auto max-w-2xl text-base leading-relaxed text-slate-600">
-              Kick off an immersive, document-by-document ingestion flow. We will extract entities,
-              reconcile mismatches, and stage your dealer audit dashboard automatically.
+              Upload vehicle registration documents and watch our AI automatically extract key information, 
+              cross-reference data across forms, and identify discrepancies for dealer compliance.
             </p>
           </div>
           <div className="w-full max-w-3xl space-y-6">
             <label className="relative flex flex-col items-center justify-center gap-3 rounded-3xl border border-dashed border-slate-300 bg-white/90 px-8 py-10 text-slate-600 shadow-sm transition hover:border-slate-500 hover:bg-white">
               <Upload className="h-6 w-6" />
-              <div className="text-base font-medium">Drop your PDFs here</div>
+              <div className="text-base font-medium">Upload vehicle registration documents</div>
               <p className="text-sm text-slate-500">
-                Accepts multiple uploads · we&apos;ll classify each file automatically
+                Forms 20/21, invoices, insurance, PAN, Aadhaar · AI will extract and verify all data
               </p>
               <input
                 type="file"
@@ -706,12 +706,12 @@ export default function CaseVerifierUI() {
 
             {hasUploads && (
               <div className="w-full max-w-3xl space-y-3 text-left">
-                <div className="flex items-center justify-between">
-                  <div className="text-sm font-medium text-slate-700">Uploaded documents</div>
-                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
-                    {queuedUploads.length} file{queuedUploads.length > 1 ? "s" : ""}
-                  </div>
-                </div>
+                 <div className="flex items-center justify-between">
+                   <div className="text-sm font-medium text-slate-700">Registration documents ready for processing</div>
+                   <div className="text-xs uppercase tracking-[0.2em] text-slate-400">
+                     {queuedUploads.length} document{queuedUploads.length > 1 ? "s" : ""}
+                   </div>
+                 </div>
                 <div className="overflow-x-auto">
                   <div className="flex items-center gap-3 pb-1">
                     {queuedUploads.map((upload, index) => {
@@ -748,9 +748,9 @@ export default function CaseVerifierUI() {
                                 <Trash2 className="h-4 w-4" />
                               </button>
                             </div>
-                            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                              Ready for AI classification. We&apos;ll identify document type before extraction.
-                            </div>
+                             <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                               Ready for processing. AI will classify as Form 20/21, Invoice, Insurance, etc.
+                             </div>
                           </PopoverContent>
                         </Popover>
                       );
@@ -774,10 +774,10 @@ export default function CaseVerifierUI() {
                 onClick={handleStart}
               >
                 <span className="absolute inset-0 bg-gradient-to-r from-black via-zinc-900 to-black opacity-90 transition-opacity group-hover:opacity-100" />
-                <span className="relative z-10 flex items-center gap-2 tracking-tight text-white">
-                  <Play className="h-5 w-5 fill-white" />
-                  Start verification
-                </span>
+                 <span className="relative z-10 flex items-center gap-2 tracking-tight text-white">
+                   <Play className="h-5 w-5 fill-white" />
+                   Process documents
+                 </span>
               </Button>
             </motion.div>
           )}
